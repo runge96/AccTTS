@@ -1,0 +1,13 @@
+model_path: Qwen/QWen2.5-1.5B-Instruct
+prm_path: Skywork/Skywork-o1-Open-PRM-Qwen-2.5-1.5B
+custom_chat_template: null
+filter_duplicates: true
+approach: beam_search
+n: 4
+search_batch_size: 1  # DO NOT CHANGE!
+num_samples: 2       # REMOVE THIS LINE TO RUN ON THE WHOLE DATASET
+seed: 0
+push_to_hub: false
+temperature: 0
+# triton_decode_kernel: chunked
+# num_iterations: 2

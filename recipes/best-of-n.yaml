@@ -1,0 +1,15 @@
+# refer to src/sal/config.py for more options
+
+model_path: Qwen/QWen2.5-1.5B-Instruct
+prm_path: Skywork/Skywork-o1-Open-PRM-Qwen-2.5-1.5B
+custom_chat_template: null
+approach: best_of_n
+n: 4
+search_batch_size: 1
+timing_enabled: false
+sort_completed: true
+filter_duplicates: true
+num_samples: 1         # REMOVE THIS LINE TO RUN ON THE WHOLE DATASET
+seed: 0
+push_to_hub: false
+max_tokens: 65536

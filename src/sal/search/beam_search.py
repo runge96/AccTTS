@@ -14,11 +14,15 @@
 # limitations under the License.
 import copy
 import logging
+import time
 from collections import defaultdict
 
 import numpy as np
 from tqdm import tqdm
 from vllm import LLM, SamplingParams
+from vllm.attention.ops.attn_timing import (get_and_reset_stats,
+                                            is_enabled as attn_timing_enabled,
+                                            reset_stats)
 
 from sal.config import Config
 from sal.models.reward_models import PRM
@@ -29,16 +33,29 @@ logger = logging.getLogger()
 from sal.utils.score import aggregate_scores
 
 
-def _beam_search(batch_of_prompts, config: Config, llm: LLM, prm: PRM) -> list[Beam]:
+def _beam_search(
+    batch_of_prompts, config: Config, llm: LLM, prm: PRM
+) -> tuple[list[Beam], dict[str, list[list[int]]], dict[str, list[dict[str, object]]]]:
+    # sampling_params = SamplingParams(
+    #     temperature=config.temperature,
+    #     max_tokens=config.max_tokens,
+    #     top_p=config.top_p,
+    #     stop=["\n\n"],
+    #     include_stop_str_in_output=True,
+    #     n=1,
+    # )
     sampling_params = SamplingParams(
         temperature=config.temperature,
-        max_tokens=config.max_tokens,
+        max_tokens=20,
+        min_tokens=20,
         top_p=config.top_p,
-        stop=["\n\n"],
+        stop=[],
         include_stop_str_in_output=True,
+        ignore_eos = True,
         n=1,
     )
 
+    # Initialize beams - Creates n beams per prompt
     beams: list[Beam] = []
     for prompt in batch_of_prompts:
         for i in range(config.n):
@@ -61,6 +78,10 @@ def _beam_search(batch_of_prompts, config: Config, llm: LLM, prm: PRM) -> list[B
             )
 
     completed_beams: list[Beam] = []
+    beam_step_token_lengths: dict[str, list[list[int]]] = defaultdict(list)
+    attn_step_timings: dict[str, list[dict[str, object]]] = defaultdict(list)
+    wall_step_timings: dict[str, list[dict[str, object]]] = defaultdict(list)
+    wall_total_timings: dict[str, float] = defaultdict(float)
 
     for i in tqdm(range(config.num_iterations), desc="Beam search iterations"):
         if i == 0:
@@ -85,14 +106,24 @@ def _beam_search(batch_of_prompts, config: Config, llm: LLM, prm: PRM) -> list[B
 
         if i == config.num_iterations - 1:
             # Last iteration, generate to EOS
+            # sampling_params = SamplingParams(
+            #     temperature=config.temperature,
+            #     max_tokens=config.max_tokens,
+            #     top_p=config.top_p,
+            #     n=1,
+            # )
             sampling_params = SamplingParams(
-                temperature=config.temperature,
-                max_tokens=config.max_tokens,
-                top_p=config.top_p,
-                n=1,
-            )
-
-        convs = [
+            temperature=config.temperature,
+            max_tokens=20,
+            min_tokens=20,
+            top_p=config.top_p,
+            stop=[],
+            include_stop_str_in_output=True,
+            ignore_eos = True,
+            n=1,
+        )
+        
+        convs = [ # Build conversations & generate for each beam
             build_conv(b.prompt, b.current_text, config.system_prompt)
             for b in active_beams
         ]
@@ -109,12 +140,26 @@ def _beam_search(batch_of_prompts, config: Config, llm: LLM, prm: PRM) -> list[B
             tokenize=False,
         )
         lookahead = 0 if i == config.num_iterations - 1 else config.lookahead
-        gen_results = generate_k_steps(
+        if attn_timing_enabled():
+            reset_stats()
+        wall_start = time.perf_counter()
+        gen_results = generate_k_steps(  # Generate one step
             templated_convs, lookahead, llm, sampling_params, 1
         )
+        wall_end = time.perf_counter()
+        step_wall_time_ms = (wall_end - wall_start) * 1000.0
+        step_attn_time_ms = 0.0
+        step_attn_tokens = 0
+        if attn_timing_enabled():
+            step_attn_time_ms, step_attn_tokens = get_and_reset_stats()
 
         prompts, completions = [], []
+        step_token_lengths: dict[str, list[int]] = defaultdict(list)
         for beam, gen_result in zip(active_beams, gen_results, strict=True):
+            step_len = len(
+                tokenizer.encode(gen_result.next_texts[0], add_special_tokens=False)
+            )
+            step_token_lengths[beam.prompt].append(step_len)
             beam.next_texts = gen_result.next_texts
             beam.stop_reasons = gen_result.stop_reasons
             beam.lookahead_texts = gen_result.lookahead_texts
@@ -131,6 +176,27 @@ def _beam_search(batch_of_prompts, config: Config, llm: LLM, prm: PRM) -> list[B
                 completed_beams.append(beam)
             prompts.append(beam.prompt)
             completions.append([beam.current_text])
+        for prompt, lengths in step_token_lengths.items():
+            beam_step_token_lengths[prompt].append(lengths)
+        for prompt in step_token_lengths.keys():
+            wall_step_timings[prompt].append({
+                "step_idx": i,
+                "wall_time_ms": step_wall_time_ms,
+            })
+            wall_total_timings[prompt] += step_wall_time_ms
+        if attn_timing_enabled():
+            total_step_tokens = sum(sum(lengths)
+                                    for lengths in step_token_lengths.values())
+            if total_step_tokens > 0:
+                for prompt, lengths in step_token_lengths.items():
+                    prompt_tokens = sum(lengths)
+                    attn_step_timings[prompt].append({
+                        "step_idx": i,
+                        "attn_time_ms": step_attn_time_ms,
+                        "attn_tokens": prompt_tokens,
+                        "attn_ms_per_token":
+                        (step_attn_time_ms / total_step_tokens),
+                    })
 
         scores = prm.score(prompts, completions)
 
@@ -194,19 +260,32 @@ def _beam_search(batch_of_prompts, config: Config, llm: LLM, prm: PRM) -> list[B
         ]
         completed_beams = extended_completed_beams
 
-    return completed_beams
+    return (completed_beams, beam_step_token_lengths, attn_step_timings,
+            wall_step_timings, wall_total_timings)
 
 
-def beam_search(examples, config: Config, llm: LLM, prm: PRM):
+def beam_search(examples, indices=None, config: Config = None, llm: LLM = None,
+                prm: PRM = None):
     problems = examples["problem"]
-    beam_results = _beam_search(problems, config, llm, prm)
+    (beam_results, beam_step_token_lengths, attn_step_timings,
+     wall_step_timings, wall_total_timings) = _beam_search(
+        problems, config, llm, prm)
 
     # Group together alike beams and store in the dataset
     grouped_results = defaultdict(list)
     for results in beam_results:
         grouped_results[results.prompt].append(results)
 
-    results = {"completions": [], "pred": [], "completion_tokens": [], "scores": []}
+    results = {
+        "completions": [],
+        "pred": [],
+        "completion_tokens": [],
+        "scores": [],
+        "beam_step_token_lengths": [],
+        "attn_step_timings": [],
+        "wall_step_timings": [],
+        "wall_total_timings": [],
+    }
 
     for p in problems:
         beams = grouped_results[p]
@@ -219,5 +298,11 @@ def beam_search(examples, config: Config, llm: LLM, prm: PRM):
         results["scores"].append([b.all_scores for b in beams])
         results["pred"].append(pred)
         results["completion_tokens"].append([b.completion_tokens for b in beams])
+        results["beam_step_token_lengths"].append(
+            beam_step_token_lengths.get(p, [])
+        )
+        results["attn_step_timings"].append(attn_step_timings.get(p, []))
+        results["wall_step_timings"].append(wall_step_timings.get(p, []))
+        results["wall_total_timings"].append(wall_total_timings.get(p, 0.0))
 
     return results

@@ -14,13 +14,18 @@
 # limitations under the License.
 
 import logging
+import os
+
+# os.environ.setdefault("VLLM_LOGGING_LEVEL", "WARNING")
+# os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 
 import torch
 from vllm import LLM
+from vllm.attention.ops.attn_timing import set_enabled as set_attn_timing_enabled
 
 from sal.config import Config
 from sal.models.reward_models import load_prm
-from sal.search import beam_search, best_of_n, dvts
+from sal.search import beam_search, best_of_n_beam, dvts
 from sal.utils.data import get_dataset, save_dataset
 from sal.utils.parser import H4ArgumentParser
 from sal.utils.score import score
@@ -34,13 +39,15 @@ logger.setLevel(logging.INFO)
 APPROACHES = {
     "beam_search": beam_search,
     "dvts": dvts,
-    "best_of_n": best_of_n,
+    "best_of_n": best_of_n_beam,
 }
 
 
 def main():
     parser = H4ArgumentParser(Config)
     config = parser.parse()
+    os.environ["VLLM_TRITON_DECODE_KERNEL"] = config.triton_decode_kernel
+    set_attn_timing_enabled(config.timing_enabled)
 
     approach_fn = APPROACHES[config.approach]
 
@@ -51,7 +58,19 @@ def main():
         enable_prefix_caching=True,
         seed=config.seed,
         tensor_parallel_size=num_gpus,
+        load_format="safetensors",
+        task="generate",
+        dtype="auto",
     )
+    # llm = LLM(
+    #     model=config.model_path,
+    #     gpu_memory_utilization=config.gpu_memory_utilization,
+    #     enable_prefix_caching=True,
+    #     seed=config.seed,
+    #     tensor_parallel_size=num_gpus,
+    #     load_format="safetensors",
+    #     block_size=32,  # choose 8/16/32/64/128
+    # )
     prm = load_prm(config)
 
     dataset = get_dataset(config)
@@ -59,6 +78,7 @@ def main():
         approach_fn,
         batched=True,
         batch_size=config.search_batch_size,
+        with_indices=True,
         fn_kwargs={"config": config, "llm": llm, "prm": prm},
         desc="Running search",
         load_from_cache_file=False,
@@ -67,7 +87,7 @@ def main():
     dataset = score(dataset, config)
 
     save_dataset(dataset, config)
-    logger.info("Done 🔥!")
+    logger.info("Done ??!")
 
 
 if __name__ == "__main__":
