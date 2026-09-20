@@ -1,116 +1,149 @@
+# AccTTS: Characterizing and Optimizing Workload Dynamics in Test-Time Scaling
+
+AccTTS is a computational optimization framework for test-time scaling (TTS). During each reasoning step, beams finish asynchronously, so the active beam count decreases while the contexts of surviving beams grow. This evolution causes small-$M$ GEMM inefficiency, reduces beam-level attention parallelism, and progressively shifts latency dominance toward attention.
+
+Our contributions are:
+
+- We characterize TTS workload dynamics and connect decreasing active beam counts and growing contexts to inefficient skinny GEMMs, declining attention parallelism, and increasing attention dominance.
+- We design AccTTS with two complementary adaptations: beam-adaptive GEMM execution follows the changing beam count, while adaptive context parallelization exploits growing contexts to recover attention parallelism.
+- We integrate AccTTS into vLLM and achieve up to a **1.43x end-to-end speedup** across GPUs, TTS algorithms, models, datasets, and compute budgets.
+
+## Quick Setup
+
+### Environment
+
+Create the exported Conda environment and install AccTTS:
+
+```bash
+conda env create -f environment.yml
+conda activate sal_new_vllm
+pip install --no-deps -e .
+
+export VLLM_USE_V1=1
+export VLLM_ATTENTION_BACKEND=TRITON_ATTN_VLLM_V1
+export VLLM_ENABLE_V1_MULTIPROCESSING=0
+```
+
+The exported environment reproduces the accepted-paper setup with Python 3.11, CUDA 12.4, PyTorch 2.6.0, vLLM 0.8.5, and Triton 3.2.0. A compatible NVIDIA driver is required. Some models also require authentication through the Hugging Face CLI.
+
+### Profile GEMM Kernels
+
+```bash
+python scripts/gemm_best_templates_collect.py recipes/best-of-n.yaml
+```
+
+### Profile Attention Chunk Settings
+
+```bash
+python scripts/chunk_setting_profile.py recipes/best-of-n.yaml
+```
+
+### Build the LUT
+
+Execute `scripts/chunk_profile_results_analyze.ipynb` to aggregate the profiling results and build the runtime lookup table:
+
+```bash
+jupyter nbconvert --to notebook --execute scripts/chunk_profile_results_analyze.ipynb --inplace
+```
+
+Expected generated files:
+
+```text
+data/{model_path}/chunk_setting_profile_results.csv
+data/{model_path}/profile_results_best_method.csv
+data/{model_path}/profile_results_lut.json
+data/{model_path}/profile_results_lut.npz
+```
+
+## Quick Start
+
+### Trace the Task for Replay
+
+Run the unoptimized beam-search configuration once to record per-step generation lengths and completion behavior:
+
+```bash
+python scripts/beam_search_task_trace.py recipes/beam-search.yaml
+```
+
+The trace is written under `data/{model_path}/{dataset_name}/`. Keep the same `model_path`, `dataset_name`, and `n` for replay.
+
+### Replay with AccTTS
+
+Set the following options in `recipes/beam-search.yaml`:
+
+```yaml
+gemm_opt: true
+chunk_size: dynamic
+```
+
+Then replay the recorded task with AccTTS:
+
+```bash
+python scripts/beam_search_beam.py recipes/beam-search.yaml
+```
+
+## Results
+
+### End-to-End Acceleration
+
 <p align="center">
-  <img style="width:200px" src="https://raw.githubusercontent.com/huggingface/search-and-learn/main/assets/logo.png">
+  <img src="figures/e2e_results_QWen.png" width="95%" alt="AccTTS end-to-end acceleration on Qwen-2.5-1.5B-Instruct">
+</p>
+<p align="center">
+  <img src="figures/e2e_results_QWen_7B.png" width="95%" alt="AccTTS end-to-end acceleration on Qwen-2.5-7B-Instruct">
 </p>
 
+### Contribution Analysis
+
 <p align="center">
-      🤗 <a href="https://huggingface.co/collections/HuggingFaceH4/scaling-test-time-compute-with-open-models-675c3b475a0d6eb4528fec23" target="_blank">Models & Datasets</a> |
-      📃 <a href="https://huggingface.co/spaces/HuggingFaceH4/blogpost-scaling-test-time-compute" target="_blank">Blog Post</a>
+  <img src="figures/attribution_analysis.png" width="65%" alt="Contributions of beam-adaptive GEMM execution and adaptive context parallelization">
 </p>
 
-# Search and Learn
+## Repository Structure
 
-Recipes to enhance LLM capabilities by scaling inference-time compute. Name inspired by Rich Sutton's [Bitter Lesson](https://www.cs.utexas.edu/~eunsol/courses/data/bitter_lesson.pdf):
+- `.github/`: repository workflows.
+- `agent_markdown/`: templates for agent-assisted workflows.
+- `figures/`: paper and evaluation figures.
+- `recipes/`: model and TTS configuration files.
+- `scripts/`: profiling, tracing, replay, evaluation, and plotting scripts.
+- `src/`: TTS pipeline and AccTTS runtime implementation.
 
-> One thing that should be learned from the bitter lesson is the great power of general purpose methods, of methods that continue to scale with increased computation even as the available computation becomes very great. The two methods that seem to scale arbitrarily in this way are _**search**_ and _**learning**_.
+Large generated outputs, local model caches, raw experiment data, and binary Nsight reports are not maintained in this repository.
 
-## What is this?
+## Profiling and Evaluation
 
-Over the last few years, the scaling of _**train-time compute**_ has dominated the progress of LLMs. Although this paradigm has proven to be remarkably effective, the resources needed to pretrain ever larger models are becoming prohibitively expensive, with billion-dollar clusters already on the horizon. This trend has sparked significant interest in a complementary approach: _**test-time compute scaling.**_ Rather than relying on ever-larger pretraining budgets, test-time methods use dynamic inference strategies that allow models to “think longer” on harder problems. A prominent example is OpenAI’s o1 model, which shows consistent improvement on difficult math and coding problems as one increases the amount of test-time compute.
+The main profiling and evaluation entry points are located under `scripts/`:
 
-Although we don't know how o1 was trained, Search and Learn aims to fill that gap by providing the community with a series of recipes that enable open models to solve complex problems if you give them enough “time to think”. 
+- `gemm_best_templates_collect.py` profiles GEMM kernel designs.
+- `chunk_setting_profile.py` profiles context-splitting configurations.
+- `chunk_setting_LUT_builder.py` prepares runtime attention configurations.
+- `test_time_compute.py` runs end-to-end TTS evaluation.
+- `attribution_analysis.ipynb` generates the optimization contribution analysis.
 
-## News 🗞️
+## Recipe Instructions
 
-* **December 16, 2024**: Initial release with code to replicate the test-time compute scaling results of our [blog post](https://huggingface.co/spaces/HuggingFaceH4/blogpost-scaling-test-time-compute).
+`recipes/best-of-n.yaml` defines the workload, model, sampling budget, and AccTTS configuration. Its main parameters are:
 
-## How to navigate this project 🧭
+- `dataset_name` and `dataset_split`: Hugging Face dataset and split to evaluate.
+- `model_path`: generation model identifier or local model path.
+- `prm_path`: process reward model identifier or local path.
+- `gpu_memory_utilization`: fraction of GPU memory allocated to vLLM.
+- `approach`: TTS algorithm; use `best_of_n` for this recipe.
+- `n`: number of independently generated candidate trajectories.
+- `search_batch_size`: number of dataset examples processed in each search batch.
+- `num_samples`: optional limit on the number of dataset examples; omit it to run the full split.
+- `max_tokens`: maximum number of generated tokens per trajectory.
+- `seed`: random seed used by the inference engine.
+- `disable_prm`: skips PRM scoring when `true`, which is useful for timing-only experiments.
+- `gemm_opt`: enables beam-adaptive GEMM execution when `true`.
+- `chunk_size`: selects the attention mode: `dynamic` uses the profiled AccTTS LUT, `heuristic` uses the heuristic split-K path, and `none` uses the default attention path.
+- `timing_enabled`: enables detailed kernel timing collection.
+- `sort_completed` and `filter_duplicates`: control output ordering and duplicate removal.
+- `push_to_hub`: uploads generated results to the Hugging Face Hub when enabled.
+- `padded_prompt_len`: optionally left-pads prompts to a target token length for controlled experiments.
 
-This project is simple by design and mostly consists of:
+Additional options and defaults are defined in `src/sal/config.py`.
 
-* [`scripts`](./scripts/) to scale test-time compute for open models. 
-* [`recipes`](./recipes/) to apply different search algorithms at test-time. Three algorithms are currently supported: Best-of-N, beam search, and Diverse Verifier Tree Search (DVTS). Each recipe takes the form of a YAML file which contains all the parameters associated with a single inference run. 
+## Acknowledgment
 
-To get started, we recommend the following:
-
-1. Follow the [installation instructions](#installation-instructions) to set up your environment etc.
-2. Replicate our test-time compute results by following the [recipe instructions](./recipes/README.md).
-
-## Contents
-
-The initial release of Search and Learn will focus on the following techniques:
-
-* **Search against verifiers:** guide LLMs to search for solutions to "verifiable problems" (math, code) by using a stepwise or process reward model to score each step. Includes techniques like Best-of-N sampling and tree search.
-* **Training process reward models:** train reward models to provide a sequence of scores, one for each step of the reasoning process. This ability to provide fine-grained feedback makes PRMs a natural fit for search methods with LLMs.
-
-
-# Installation instructions
-
-To run the code in this project, first, create a Python virtual environment using e.g. Conda:
-
-```shell
-conda create -n sal python=3.11 && conda activate sal
-```
-
-```shell
-pip install -e '.[dev]'
-```
-
-Next, log into your Hugging Face account as follows:
-
-```shell
-huggingface-cli login
-```
-
-Finally, install Git LFS so that you can push models to the Hugging Face Hub:
-
-```shell
-sudo apt-get install git-lfs
-```
-
-You can now check out the `scripts` and `recipes` directories for instructions on how to scale test-time compute for open models!
-
-## Project structure
-
-```
-├── LICENSE
-├── Makefile                    <- Makefile with commands like `make style`
-├── README.md                   <- The top-level README for developers using this project
-├── recipes                     <- Recipe configs, accelerate configs, slurm scripts
-├── scripts                     <- Scripts to scale test-time compute for models
-├── pyproject.toml              <- Installation config (mostly used for configuring code quality & tests)
-├── setup.py                    <- Makes project pip installable (pip install -e .) so `sal` can be imported
-├── src                         <- Source code for use in this project
-└── tests                       <- Unit tests
-```
-
-## Replicating our test-time compute results
-
-The [`recipes` README](recipes/README.md) includes launch commands and config files in order to replicate our results.
-
-
-## Citation
-
-If you find the content of this repo useful in your work, please cite it as follows via `\usepackage{biblatex}`:
-
-```
-@misc{beeching2024scalingtesttimecompute,
-      title={Scaling test-time compute with open models},
-      author={Edward Beeching and Lewis Tunstall and Sasha Rush},
-      url={https://huggingface.co/spaces/HuggingFaceH4/blogpost-scaling-test-time-compute},
-}
-```
-
-Please also cite the original work by DeepMind upon which this repo is based:
-
-```
-@misc{snell2024scalingllmtesttimecompute,
-      title={Scaling LLM Test-Time Compute Optimally can be More Effective than Scaling Model Parameters}, 
-      author={Charlie Snell and Jaehoon Lee and Kelvin Xu and Aviral Kumar},
-      year={2024},
-      eprint={2408.03314},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG},
-      url={https://arxiv.org/abs/2408.03314}, 
-}
-```
-
+This codebase builds on [Hugging Face Search and Learn](https://github.com/huggingface/search-and-learn) and extends it with workload tracing, GEMM profiling, adaptive context parallelization, and runtime integration for AccTTS.

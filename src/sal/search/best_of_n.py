@@ -15,6 +15,7 @@
 
 import numpy as np
 from vllm import LLM, SamplingParams
+from vllm.inputs import TokensPrompt
 
 from sal.config import Config
 from sal.models.reward_models import PRM
@@ -39,9 +40,27 @@ def best_of_n(x, config: Config, llm: LLM, prm: PRM):
         convs, tokenize=False, add_generation_prompt=True
     )
 
-    # Duplicate convs to generate config.n completions per prompt so we can do continous batching
+    # Tokenize so we can optionally left-pad to a target prompt length.
+    pad_token_id = tokenizer.pad_token_id
+    if pad_token_id is None:
+        pad_token_id = tokenizer.eos_token_id
+    prompt_token_ids_list = [
+        tokenizer.encode(c, add_special_tokens=False) for c in templated_convs
+    ]
+    if config.padded_prompt_len and config.padded_prompt_len > 0:
+        target = config.padded_prompt_len
+        prompt_token_ids_list = [
+            ([pad_token_id] * (target - len(ids)) + ids) if len(ids) < target else ids
+            for ids in prompt_token_ids_list
+        ]
+
+    # Duplicate to generate config.n completions per prompt so we can do continous batching
     # This makes [p1, p2, p3, p4] become [p1, p1, p2, p2, p3, p3, p4, p4] for e.g. config.n=2
-    templated_convs = [c for conv in templated_convs for c in [conv] * config.n]
+    prompt_inputs = [
+        TokensPrompt(prompt_token_ids=ids)
+        for ids in prompt_token_ids_list
+        for _ in range(config.n)
+    ]
 
     # Initialize empty lists for completions and completion tokens
     completions = [[] for _ in range(len(x["problem"]))]
@@ -55,7 +74,7 @@ def best_of_n(x, config: Config, llm: LLM, prm: PRM):
     )
 
     responses = llm.generate(
-        templated_convs,
+        prompt_inputs,
         sampling_params=sampling_params,
         use_tqdm=False,
     )

@@ -162,3 +162,27 @@ cython_debug/
 #.idea/
 
 data/
+
+# Local/private runtime artifacts that should not be published.
+.claude/
+.cache/
+logs/
+recipes_runpod/
+scripts_runpod/
+src_runpod/
+tests/
+scripts/*.sh
+scripts/*.csv
+*.log
+*.nsys-rep
+*.ncu-rep
+*.sqlite
+data/*/hf_cache/
+scripts/data/*/hf_cache/
+agent_markdown/*LOG.*
+figures/e2e_*.png
+!figures/e2e_results_QWen.png
+!figures/e2e_results_QWen_7B.png
+figures/method_overview.png
+figures/recover_parallelism.png
+nvidia_toolkit_data/

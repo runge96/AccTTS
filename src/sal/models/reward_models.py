@@ -301,6 +301,8 @@ class SkyworkO1(PRM):
     ) -> list[list[float]]:
         # reference code: https://huggingface.co/Skywork/Skywork-o1-Open-PRM-Qwen-2.5-7B#huggingface-inference
         all_scores = []
+        batch_size = max(1, self.search_config.prm_batch_size)
+        device = self.model.pretrained_model.device
         for question, answers in zip(questions, outputs):
             processed_data = [
                 prepare_input(
@@ -308,20 +310,25 @@ class SkyworkO1(PRM):
                 )
                 for answer in answers
             ]
-            input_ids, steps, reward_flags = zip(*processed_data)
-            input_ids, attention_mask, reward_flags = prepare_batch_input_for_model(
-                input_ids, reward_flags, self.tokenizer.pad_token_id
-            )
-            device = self.model.pretrained_model.device
-            with torch.no_grad():
-                _, _, rewards = self.model(
-                    input_ids=input_ids.to(device),
-                    attention_mask=attention_mask.to(device),
-                    return_probs=True,
+            all_step_scores: list = []
+            for i in range(0, len(processed_data), batch_size):
+                chunk = processed_data[i : i + batch_size]
+                chunk_input_ids, _, chunk_reward_flags = zip(*chunk)
+                input_ids, attention_mask, reward_flags = prepare_batch_input_for_model(
+                    chunk_input_ids,
+                    chunk_reward_flags,
+                    self.tokenizer.pad_token_id,
                 )
-                all_step_scores = derive_step_rewards(
+                with torch.no_grad():
+                    _, _, rewards = self.model(
+                        input_ids=input_ids.to(device),
+                        attention_mask=attention_mask.to(device),
+                        return_probs=True,
+                    )
+                chunk_step_scores = derive_step_rewards(
                     rewards.detach().to("cpu", dtype=torch.float32), reward_flags
                 )
+                all_step_scores.extend(chunk_step_scores)
             all_scores.append(all_step_scores)
         return all_scores
 

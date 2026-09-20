@@ -20,9 +20,8 @@ from collections import defaultdict
 import numpy as np
 from tqdm import tqdm
 from vllm import LLM, SamplingParams
-from vllm.attention.ops.attn_timing import (get_and_reset_stats,
-                                            is_enabled as attn_timing_enabled,
-                                            reset_stats)
+from vllm.attention.ops.attn_timing import get_and_reset_stats, reset_stats
+from vllm.attention.ops.attn_timing import is_enabled as attn_timing_enabled
 
 from sal.config import Config
 from sal.models.reward_models import PRM

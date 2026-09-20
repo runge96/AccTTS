@@ -1,15 +1,24 @@
 # refer to src/sal/config.py for more options
 
+dataset_name: HuggingFaceH4/MATH-500
+dataset_split: test
+# dataset_name: AI-MO/aimo-validation-aime
+# dataset_split: train
 model_path: Qwen/QWen2.5-1.5B-Instruct
 prm_path: Skywork/Skywork-o1-Open-PRM-Qwen-2.5-1.5B
+gpu_memory_utilization: 0.9
 custom_chat_template: null
 approach: best_of_n
-n: 4
+n: 128
 search_batch_size: 1
 timing_enabled: false
 sort_completed: true
 filter_duplicates: true
-num_samples: 1         # REMOVE THIS LINE TO RUN ON THE WHOLE DATASET
+# num_samples: 1         # REMOVE THIS LINE TO RUN ON THE WHOLE DATASET
 seed: 0
 push_to_hub: false
-max_tokens: 65536
+max_tokens: 2048
+gemm_opt: false
+chunk_size: none     # [dynamic, heuristic, none]
+disable_prm: true
+# padded_prompt_len: 2048   # 0 = no padding; otherwise left-pad templated prompt to this many tokens

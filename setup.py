@@ -21,7 +21,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 extras = {}
 extras["quality"] = ["ruff", "isort"]
 extras["tests"] = ["pytest"]
-extras["dev"] = ["vllm==0.6.3"] + extras["quality"] + extras["tests"]
+extras["dev"] = ["vllm==0.8.5"] + extras["quality"] + extras["tests"]
 extras["trl"] = "trl @ git+https://github.com/huggingface/trl.git"
 
 install_requires = [
@@ -35,15 +35,14 @@ install_requires = [
 ]
 
 setup(
-    name="search-and-learn",
+    name="acctts",
     version="0.1.0",
-    author="The Hugging Face team (past and future)",
-    author_email="lewis@huggingface.co",
-    description="A tool for search-based methods on llms",
+    author="Haodong",
+    description="AccTTS: optimizing workload dynamics in test-time scaling",
     long_description=open("README.md", "r", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
-    url="https://github.com/huggingface/search-and-learn",
-    keywords="nlp deep learning mcts",
+    url="https://github.com/runge96/AccTTS",
+    keywords="large language models test-time scaling inference optimization",
     license="Apache",
     package_dir={"": "src"},
     packages=find_packages("src"),

@@ -1,0 +1,25 @@
+# refer to src/sal/config.py for more options
+
+dataset_name: AI-MO/aimo-validation-aime
+dataset_split: train
+model_path: meta-llama/Llama-3.2-1B-Instruct
+prm_path: Skywork/Skywork-o1-Open-PRM-Qwen-2.5-1.5B
+gpu_memory_utilization: 0.9
+custom_chat_template: null
+approach: beam_search
+n: 64
+beam_width: 4
+num_iterations: 40
+lookahead: 0
+search_batch_size: 1
+timing_enabled: false
+sort_completed: true
+filter_duplicates: true
+seed: 0
+# num_samples: 10
+push_to_hub: false
+max_tokens: 4096
+gemm_opt: true
+chunk_size: dynamic     # [dynamic, heuristic, none]
+disable_prm: true
+

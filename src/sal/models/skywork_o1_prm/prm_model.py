@@ -145,9 +145,6 @@ class SkyworkPRMModel(PreTrainedModelWrapper):
             kwargs (`dict`, `optional`):
                 Additional keyword arguments, that are passed to the wrapped model.
         """
-        kwargs["output_hidden_states"] = (
-            True  # this had already been set in the LORA / PEFT examples
-        )
         kwargs["past_key_values"] = past_key_values
 
         if (
@@ -156,15 +153,20 @@ class SkyworkPRMModel(PreTrainedModelWrapper):
         ):
             kwargs.pop("past_key_values")
 
-        base_model_output = self.pretrained_model(
+        # Bypass the LM head: callers (sal/.../reward_models.py SkyworkO1.score)
+        # discard lm_logits and only consume `value`. Computing logits at
+        # [batch, seq, vocab_size] (~3 GB bf16, ~6 GB after .float() at
+        # batch=4 / seq=2300 for Qwen2.5-1.5B) is multi-GB pure waste, and the
+        # spike scales with the longest completion in the batch. Calling the
+        # base Qwen2Model directly skips lm_head and the all-layers
+        # output_hidden_states stack.
+        base_outputs = self.pretrained_model.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
             **kwargs,
         )
 
-        last_hidden_state = base_model_output.hidden_states[-1]
-        lm_logits = base_model_output.logits
-        loss = base_model_output.loss
+        last_hidden_state = base_outputs.last_hidden_state
 
         if last_hidden_state.device != self.v_head.summary.weight.device:
             last_hidden_state = last_hidden_state.to(self.v_head.summary.weight.device)
@@ -174,12 +176,11 @@ class SkyworkPRMModel(PreTrainedModelWrapper):
         if return_probs:
             value = torch.nn.functional.sigmoid(value)  # convert logits_diff_to_Probs
 
-        # force upcast in fp32 if logits are in half-precision
-        if lm_logits.dtype != torch.float32:
-            lm_logits = lm_logits.float()
+        lm_logits = None
+        loss = None
 
         if return_past_key_values:
-            return (lm_logits, loss, value, base_model_output.past_key_values)
+            return (lm_logits, loss, value, base_outputs.past_key_values)
         else:
             return (lm_logits, loss, value)
 
